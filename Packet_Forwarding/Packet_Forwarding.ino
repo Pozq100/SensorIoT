@@ -23,7 +23,6 @@ int HTTP_PORT = 80;
 // Authorization Token (Bearer Token)
 String authName = "admin";
 String authPass = "NicJjG18XOV3U1efQyo8AQ==";
-
 String token = "";
 
 // Variables ---------------------------------------------------------------
@@ -49,6 +48,9 @@ void loop() {
   // Leave empty if you just want to execute once
   int arraySize = 0;
   String* arr = new String[arraySize];
+
+  client.stop();
+  
   if (client.connect(server, HTTP_PORT)) {
     // Prepare and send the HTTP GET request
     client.println("GET /" + packetAPI + " HTTP/1.1");  // GET Request
@@ -75,15 +77,19 @@ void loop() {
     int index = getStringIndex(response, "devEUI", 0);
     while ( index != -1 ){
       String eui = getString(response, index + 9, '"');
+      
+      response = response.substring(index-1);
+      
       if (!(stringInArray(eui, arr, arraySize)) ) {
         Serial.println("devEUI: " + eui);
         index = getStringIndex(response, "humidity", index);
         if (index == -1) break;
         
         Serial.println("Humidity: " + getString(response, index + 11, ','));
+
         index = getStringIndex(response, "temperature", index);
         if (index == -1) break;
-        
+
         Serial.println("Temperature: " + getString(response, index + 14, '}'));
         
         String* tempArray = new String[arraySize + 1];
@@ -103,9 +109,24 @@ void loop() {
       }
       
       
-      index = getStringIndex(response, "devEUI", index + 1);
-
+      index = getStringIndex(response, "devEUI", index);
     } 
+    
+    client.stop();  // Close the connection to free up resources
+    
+    // Now proceed with the DELETE request
+    if (client.connect(server, HTTP_PORT)) {
+      client.println("DELETE /" + packetAPI + " HTTP/1.1");
+      client.println("Host: " + String(endpoint));
+      client.println("Authorization: Bearer " + token);
+      client.println("Content-Type: application/json");
+      client.println("Connection: close");
+      client.println();
+
+      delay(5000);
+    } else {
+      Serial.println("- Failed to connect for DELETE request");
+    }
     
   } else {
     Serial.println("- Connection to LoRaWAN device failed");
@@ -138,6 +159,8 @@ String getString(String response,int index, char lookOut){
 }
 
 String getToken(){
+  client.stop();
+  
   if (client.connect(server, HTTP_PORT)) {
     Serial.println("Getting Token...");
     JsonDocument doc;
@@ -180,6 +203,7 @@ String getToken(){
 
     // Extract JWT from the JSON response
     String jwt = doc2["jwt"].as<String>();
+    
     return jwt;
   }
 }

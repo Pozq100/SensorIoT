@@ -6,7 +6,7 @@ const char* ssid = "eee-iot";
 const char* password = "I0t@eee2024!";
 
 // Replace with your MQTT broker address
-const char* mqtt_server = "54.252.31.39";
+const char* mqtt_server = "54.205.166.47";
 
 // Create a Wi-Fi client
 WiFiClient espClient;
@@ -16,7 +16,7 @@ PubSubClient client(espClient);
 void setup() {
   Serial.begin(9600);
   setup_wifi();
-  client.setServer(mqtt_server, 1883);
+  client.setServer(mqtt_server, 3000);
 }
 
 void setup_wifi() {
@@ -41,9 +41,9 @@ void setup_wifi() {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
-    if (client.connect("OptaClient")) {
+    if (client.connect("OptaClient","device_01","nohackmepls")) {
       Serial.println("connected");
-      client.subscribe("test/topic");
+      client.subscribe("test");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -68,6 +68,6 @@ void loop() {
     snprintf(msg, 50, "Hello world! %lu", now);
     Serial.print("Publishing message: ");
     Serial.println(msg);
-    client.publish("test/topic", msg);
+    client.publish("test", msg);
   }
 }
