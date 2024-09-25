@@ -9,9 +9,11 @@ char password[] = "I0t@eee2024!";
 int status  = WL_IDLE_STATUS;
 
 // AWS Endpoint URL
-char endpoint[] = "13.55.17.179";
+char endpoint[] = "54.252.31.39"; //rest API
 String endpointEntity = "/web";
 int PORT = 8080;
+
+char apiKey[] = "95130";  // Your API key
 
 // Variables ---------------------------------------------------------------
 WiFiClient client;
@@ -32,6 +34,10 @@ void setup() {
   Serial.println("- NETWORK INFORMATION");
   Serial.print("- You're now connected to the network ");
   
+}
+
+void loop() {
+
   StaticJsonDocument<200> jsonDoc;
   jsonDoc["sensor"] = "temperature";
   jsonDoc["value"] = 24.5;
@@ -46,10 +52,12 @@ void setup() {
 
       // Prepare the HTTP request
       client.println("POST " + endpointEntity + " HTTP/1.1");
-      client.println("Host: 13.55.17.179:8080/web");
+      client.println("Host: 54.252.31.39:8080/web");
       client.println("Content-Type: application/json");
       client.print("Content-Length: ");
       client.println(jsonData.length());
+      client.print("x-api-key: ");  // Custom header for API key
+      client.println(apiKey);  // Send the API key
       client.println(); // End of headers
       client.println(jsonData);  // Post the JSON data
 
@@ -74,9 +82,6 @@ void setup() {
     Serial.println("WiFi disconnected");
   }
   
-}
-
-void loop() {
   
   delay(2000);  // Wait for response
 
