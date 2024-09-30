@@ -5,12 +5,20 @@
 #include <WiFi.h>
 #include <String.h>
 
-
 // Constants
 constexpr auto baudrate {9600};
 constexpr auto bitduration {1.f / baudrate};
 constexpr auto preDelayBR {bitduration * 9.6f * 3.5f * 1e6};
 constexpr auto postDelayBR {bitduration * 9.6f * 3.5f * 1e6};
+
+const int USER_LEDS[] = {LED_D0, LED_D1, LED_D2, LED_D3};
+/**
+ * LED1 = Wifi connection, Connected - HIGH
+ * LED2 = MODBUS connection, No error - HIGH
+ * LED3 - Client can connect - HIGH
+ * LEd4 = Sending data, sending - HIGH
+ */
+
 
 // WiFi Credentials
 char ssid[] = "eee-iot";
@@ -47,6 +55,10 @@ void setup() {
     // Serial.println("Failed to start Modbus RTU Client!");
     while (1);
   }
+
+  for (int i = 0; i < 4; i++) {
+    pinMode(USER_LEDS[i], OUTPUT);
+  }
   
 }
 
@@ -54,7 +66,9 @@ void setup() {
 void loop() {
   // Read sensor data and post it to the server
   postData();
-  delay(300000);  // Wait before the next reading
+  delay(274000);  // Wait before the next reading
+
+  
 }
 
 void connectToWiFi() {
@@ -62,6 +76,7 @@ void connectToWiFi() {
     //Serial.print("- Attempting to connect to WPA SSID: ");
     //Serial.println(ssid);
     status = WiFi.begin(ssid, password);
+    digitalWrite(USER_LEDS[0], LOW);
     delay(500);
   }
 
@@ -69,57 +84,41 @@ void connectToWiFi() {
   // Serial.println();
   // Serial.println("- NETWORK INFORMATION");
   // Serial.print("- You're now connected to the network ");
+  digitalWrite(USER_LEDS[0], HIGH); 
 }
 
 void postData() {
   // Create JSON document to store sensor data
-  StaticJsonDocument<200> jsonDoc;
+  StaticJsonDocument<1024> jsonDoc;
 
   
   jsonDoc["Sensor_1_Energy"] = readDDSUAddress(1, 0x101E);
-  delay(500);
-  jsonDoc["Sensor_1_Current"] = (readDDSUAddress(1, 0x200C) + readDDSUAddress(1, 0x200E) + readDDSUAddress(1, 0x2010))*0.001;
-  delay(500);
-  jsonDoc["Sensor_1_Voltage"] = (readDDSUAddress(1, 0x2006) + readDDSUAddress(1, 0x2008) + readDDSUAddress(1, 0x200A))*0.1;
-  delay(500);
+  jsonDoc["Sensor_1_Current"] = round(sqrt((pow(readDDSUAddress(1, 0x200C)*0.001, 2 ) + pow(readDDSUAddress(1, 0x200E)*0.001, 2 ) + pow(readDDSUAddress(1, 0x2010)*0.001, 2)) / 3) * 100.0) / 100.0;
+  jsonDoc["Sensor_1_Voltage"] = round(sqrt((pow(readDDSUAddress(1, 0x2006)*0.1, 2 ) + pow(readDDSUAddress(1, 0x2008)*0.1, 2 ) + pow(readDDSUAddress(1, 0x200A)*0.1, 2)) / 3) * 100.0) / 100.0;
 
-  
   jsonDoc["Sensor_2_Energy"] = readDDSUAddress(2, 0x101E);
-  delay(500);
-  jsonDoc["Sensor_2_Current"] = (readDDSUAddress(2, 0x200C)+readDDSUAddress(2, 0x200E)+readDDSUAddress(2, 0x2010))*0.001;
-  delay(500);
-  jsonDoc["Sensor_2_Voltage"] = (readDDSUAddress(2, 0x2006)+readDDSUAddress(2, 0x2008)+readDDSUAddress(2, 0x200A))*0.1;
-  delay(500);
+  jsonDoc["Sensor_2_Current"] = round(sqrt((pow(readDDSUAddress(2, 0x200C)*0.001, 2 ) + pow(readDDSUAddress(2, 0x200E)*0.001, 2 ) + pow(readDDSUAddress(2, 0x2010)*0.001, 2)) / 3) * 100.0) / 100.0;
+  jsonDoc["Sensor_2_Voltage"] = round(sqrt((pow(readDDSUAddress(2, 0x2006)*0.1, 2 ) + pow(readDDSUAddress(2, 0x2008)*0.1, 2 ) + pow(readDDSUAddress(2, 0x200A)*0.1, 2)) / 3) * 100.0) / 100.0;
+
+ 
   
   jsonDoc["Sensor_3_Energy"] = readDDSUAddress(3, 0x4000);
-  delay(500);
   jsonDoc["Sensor_3_Current"] = readDDSUAddress(3, 0x2002);
-  delay(500);
   jsonDoc["Sensor_3_Voltage"] = readDDSUAddress(3, 0x2000);
-  delay(500);
 
   
   jsonDoc["Sensor_4_Energy"] = readDDSUAddress(4, 0x4000);
-  delay(500);
   jsonDoc["Sensor_4_Current"] = readDDSUAddress(4, 0x2002);
-  delay(500);
   jsonDoc["Sensor_4_Voltage"] = readDDSUAddress(4, 0x2000);
-  delay(500);
     
   jsonDoc["Sensor_5_Energy"] = readDDSUAddress(5, 0x4000);
-  delay(500);
   jsonDoc["Sensor_5_Current"] = readDDSUAddress(5, 0x2002);
-  delay(500);
   jsonDoc["Sensor_5_Voltage"] = readDDSUAddress(5, 0x2000);
-  delay(500);
     
   jsonDoc["Sensor_6_Energy"] = readDDSUAddress(6, 0x4000);
-  delay(500);
   jsonDoc["Sensor_6_Current"] = readDDSUAddress(6, 0x2002);
-  delay(500);
   jsonDoc["Sensor_6_Voltage"] = readDDSUAddress(6, 0x2000);
   
-
   
   // Convert JSON to string
   String jsonData;
@@ -134,7 +133,10 @@ void postData() {
 
 void sendDataToServer(const String& jsonData) {
   if (WiFi.status() == WL_CONNECTED) {
+
+    client.setTimeout(5000);
     if (client.connect(endpoint, PORT)) {
+      
       // Prepare HTTP POST request
       client.println("POST " + endpointEntity + " HTTP/1.1");
       client.println("Host: 54.252.31.39:8080");
@@ -145,24 +147,38 @@ void sendDataToServer(const String& jsonData) {
       client.println(apiKey);
       client.println();  // End of headers
       client.println(jsonData);  // Send JSON data
-
+      
+      delay(1000);
+        
       // Read server response
-      /**
-      while (client.connected()) {
-        String line = client.readStringUntil('\n');
-        if (line == "\r") break;
+      String responseLine = client.readStringUntil('\n');  // Read the first line (status line)
+      // Example of a status line: HTTP/1.1 200 OK
+      
+      // Check if the server response contains "200 OK"
+      if (responseLine.indexOf("200 OK") > 0 || responseLine.indexOf("201 Created") > 0) {
+        // Successfully received OK response from the server
+        digitalWrite(USER_LEDS[3], HIGH);  // Indicate success
+      } else {
+        // Handle non-OK responses
+        digitalWrite(USER_LEDS[3], LOW);  // Indicate failure
+        // Optionally, print the response for debugging
+        // Serial.println("Server responded with an error:");
+        // Serial.println(responseLine);
       }
-      **/
       
 
       // Print server response
       // String response = client.readString();
       // Serial.println("Server response:");
       // Serial.println(response);
+      digitalWrite(USER_LEDS[2], HIGH); 
+    } else {
+      digitalWrite(USER_LEDS[2], LOW);
     }
-    client.stop();  // Close the connection
+    client.stop();
   } else {
-    // Serial.println("WiFi disconnected");
+    
+    connectToWiFi();
   }
 }
 
@@ -176,6 +192,7 @@ float readDDSUAddress(int ID, int addr) {
   Serial.print("Reading values from device ");
   Serial.println("Slave address of sensor: " + String(ID));
   **/
+  delay(1000);
   if (!ModbusRTUClient.requestFrom(ID, INPUT_REGISTERS, addr, 2)) {
 
     /**
@@ -184,9 +201,11 @@ float readDDSUAddress(int ID, int addr) {
     Serial.print(": ");
     Serial.println(ModbusRTUClient.lastError());
     **/
+    digitalWrite(USER_LEDS[1], LOW); 
     
     return 0.0;
   } else {
+    digitalWrite(USER_LEDS[1], HIGH); 
     unsigned long firstByte = ModbusRTUClient.read();
     unsigned long secondByte = ModbusRTUClient.read();
     unsigned long finalValue = (firstByte << 16) | secondByte;
