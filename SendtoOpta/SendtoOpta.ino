@@ -89,7 +89,11 @@ void connectToWiFi() {
 
 void postData() {
   // Create JSON document to store sensor data
-  StaticJsonDocument<1024> jsonDoc;
+  DynamicJsonDocument jsonDoc(1024);
+
+  if (jsonDoc.capcity() == 0){
+    NVIC_SystemReset();
+  }
 
   
   jsonDoc["Sensor_1_Energy"] = readDDSUAddress(1, 0x101E);
@@ -121,7 +125,7 @@ void postData() {
   
   
   // Convert JSON to string
-  String jsonData;
+  char jsonData[1024];
   serializeJson(jsonDoc, jsonData);
 
   // Send data to the serial monitor
@@ -195,12 +199,7 @@ float readDDSUAddress(int ID, int addr) {
   delay(1000);
   if (!ModbusRTUClient.requestFrom(ID, INPUT_REGISTERS, addr, 2)) {
 
-    /**
-    Serial.print("Failed to read from address ");
-    Serial.print(addr);
-    Serial.print(": ");
-    Serial.println(ModbusRTUClient.lastError());
-    **/
+    NVIC_SystemReset();
     digitalWrite(USER_LEDS[1], LOW); 
     
     return 0.0;
@@ -222,5 +221,5 @@ double precision2double(unsigned long f) {
 
   memcpy(&v, &f, sizeof(f));  // Copy raw value into IEEE754 structure ,copy f ( Byte ) into v ( IEEE754 )
   double result = (1 + v.m * pow(2, -23)) * pow(2, v.e - 127);
-  return result;
+  return result;
 }
