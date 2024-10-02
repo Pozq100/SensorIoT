@@ -80,9 +80,16 @@ void connectToWiFi() {
 
 void postData() {
   // Create JSON document to store sensor data
-  StaticJsonDocument<1024> jsonDoc;
+  StaticJsonDocument<1024> jsonDoc; 
+  //There is power, energy, voltage and current
+  //current is not really important and and volatge should be constant
+  if (jsonDoc.capacity() == 0){
+    NVIC_SystemReset();
+  }
 
-  
+  /**
+   * 
+   * 
   jsonDoc["Sensor_1_Energy"] = readDDSUAddress(1, 0x101E);
   jsonDoc["Sensor_1_Current"] = round(sqrt((pow(readDDSUAddress(1, 0x200C)*0.001, 2 ) + pow(readDDSUAddress(1, 0x200E)*0.001, 2 ) + pow(readDDSUAddress(1, 0x2010)*0.001, 2)) / 3) * 100.0) / 100.0;
   jsonDoc["Sensor_1_Voltage"] = round(sqrt((pow(readDDSUAddress(1, 0x2006)*0.1, 2 ) + pow(readDDSUAddress(1, 0x2008)*0.1, 2 ) + pow(readDDSUAddress(1, 0x200A)*0.1, 2)) / 3) * 100.0) / 100.0;
@@ -91,6 +98,7 @@ void postData() {
   jsonDoc["Sensor_2_Current"] = round(sqrt((pow(readDDSUAddress(2, 0x200C)*0.001, 2 ) + pow(readDDSUAddress(2, 0x200E)*0.001, 2 ) + pow(readDDSUAddress(2, 0x2010)*0.001, 2)) / 3) * 100.0) / 100.0;
   jsonDoc["Sensor_2_Voltage"] = round(sqrt((pow(readDDSUAddress(2, 0x2006)*0.1, 2 ) + pow(readDDSUAddress(2, 0x2008)*0.1, 2 ) + pow(readDDSUAddress(2, 0x200A)*0.1, 2)) / 3) * 100.0) / 100.0;
 
+ 
   
   jsonDoc["Sensor_3_Energy"] = readDDSUAddress(3, 0x4000);
   jsonDoc["Sensor_3_Current"] = readDDSUAddress(3, 0x2002);
@@ -108,6 +116,30 @@ void postData() {
   jsonDoc["Sensor_6_Energy"] = readDDSUAddress(6, 0x4000);
   jsonDoc["Sensor_6_Current"] = readDDSUAddress(6, 0x2002);
   jsonDoc["Sensor_6_Voltage"] = readDDSUAddress(6, 0x2000);
+   */
+  
+  jsonDoc["Sensor_1_Energy"] = readDDSUAddress(1, 0x101E);
+  jsonDoc["Sensor_1_Power"] = readDDSUAddress(1,2012) * 0.1;
+
+
+  jsonDoc["Sensor_2_Energy"] = readDDSUAddress(2, 0x101E);
+  jsonDoc["Sensor_2_Power"] = readDDSUAddress(2,2012) * 0.1;
+
+  
+  jsonDoc["Sensor_3_Energy"] = readDDSUAddress(3, 0x4000);
+  jsonDoc["Sensor_3_Power"] = readDDSUAddress(3,2004);
+
+  
+  jsonDoc["Sensor_4_Energy"] = readDDSUAddress(4, 0x4000);
+  jsonDoc["Sensor_4_Power"] = readDDSUAddress(4,2004);
+
+    
+  jsonDoc["Sensor_5_Energy"] = readDDSUAddress(5, 0x4000);
+  jsonDoc["Sensor_5_Power"] = readDDSUAddress(5,2004);
+
+    
+  jsonDoc["Sensor_6_Energy"] = readDDSUAddress(6, 0x4000);
+  jsonDoc["Sensor_6_Power"] = readDDSUAddress(6,2004);
   
 
   
