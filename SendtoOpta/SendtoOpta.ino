@@ -22,8 +22,7 @@ const int USER_LEDS[] = {LED_D0, LED_D1, LED_D2, LED_D3};
 
 // WiFi Credentials
 char ssid[] = "eee-iot";
-char password[] = "I0t@eee2024!";
-int status = WL_IDLE_STATUS;
+char password[] = "I0t@mar2025!";
 
 // AWS Endpoint URL
 char endpoint[] = "54.252.31.39";  // REST API
@@ -70,16 +69,16 @@ void loop() {
     postData();
     digitalWrite(USER_LEDS[3], LOW);
     Serial.println("End Loop");
-    delay(289000);
+    delay(271000);
 
 
 }
 
 void connectToWiFi() {
-  while (status != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED) {
     Serial.print("- Attempting to connect to WPA SSID: ");
     Serial.println(ssid);
-    status = WiFi.begin(ssid, password);
+    WiFi.begin(ssid, password);
     digitalWrite(USER_LEDS[0], LOW);
     delay(500);
   }
@@ -209,7 +208,6 @@ void sendDataToServer(const String& jsonData) {
     }
     client.stop();
   } else {
-    
     connectToWiFi();
   }
 }
