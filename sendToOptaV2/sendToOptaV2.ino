@@ -7,8 +7,8 @@
 #include <WiFi.h>
 #include <String.h>
 #include <Ethernet.h>
-
-
+#include <PubSubClient.h>
+#include <Scheduler.h>
 
 // Constants
 constexpr auto baudrate {9600};
@@ -36,12 +36,14 @@ const int ENERGY_DL[] = ENERGY_DATA_LEN;
 
 const int FC_ADD[] = FC_ADDRESS;
 const int FC_ACTION_ADD[] = FC_ACTION_ADDRESS;
+
 // WiFi
 char ssid[] = WIFI_SSID;
 char password[] = WIFI_PASS;
 
 // AWS EC2 URL
 char endpoint[] = AWS_IP;
+String statusPath = AWS_FC_STATUS;
 String endpointPath = AWS_PATH;
 int PORT = AWS_PORT;
 char apiKey[] = AWS_API;
@@ -56,6 +58,13 @@ char lorawan[] = SERVER_STRING;
 String packetAPI = "api/urpackets";
 String loginAPI = "api/internal/login";
 
+// MQTT
+const char* mqtt_server = MQTT_SERVER;
+int mqttPort = MQTT_PORT;
+char mqttTopic[] = MQTT_TOPIC;
+char mqttUser[] = MQTT_USER;
+char mqttPass[] = MQTT_PASS;
+
 int HTTP_PORT = 80;
 
 // Authorization Token (Bearer Token)
@@ -66,16 +75,25 @@ String token = "";
 
 
 // Client Objects
+EthernetClient ethClient;
 WiFiClient client;
-EthernetClient espClient;
+WiFiClient httpClient;
+PubSubClient mqttClient(client);
 
-// Functions
+// Connection Functions
 void connectToWiFi();
 void connectToEthernet();
 void connectToModbus();
+void connectToMQTT();
+
+// Debugging Functions
 void status_debug(int error_code);
 void clearError();
+void waitTime(int milli);
+
+// HTTP to Database Functions
 void sendDataToServer(const String& jsonData);
+void updateAirConStatus();
 void postData();
 
 // Energy Meter Functions
@@ -89,45 +107,75 @@ String getToken();
 int getStringIndex(String response,String p, int startIndex);
 String getString(String response,int index, char lookOut);
 String getLorawanData();
+void deletePackets();
 
 // Intesis Gateway Functions
 String getRoomTemperatureData();
+
+String getFCStatus(int FU);
+String getFCFanStatus(int FU);
+String getFCOMStatus(int FU);
+float getFCSetPoint(int FU);
+String getFCErrorCode(int FU);
+
+String getAllFCErrorCodes();
+String getAllFCFullStatus();
 String FC_Action(int FU, int action, int action_state, int mode);
 
+// MQTT Functions
+void callback(char* topic, byte* message, unsigned int length);
+void runMQTT();
 
 void setup() {
   Serial.begin(9600);
-
+  connectToEthernet();
   connectToWiFi();
-  //connectToEthernet();
   connectToModbus();
 
-//  while (token == ""){
-//    token = getToken();
-//    delay(5000);
-//  }
+  while (token == ""){
+    token = getToken();
+    delay(1000);
+  }
+
+  Serial.println("Got Token");
+  
+  mqttClient.setServer(mqtt_server, MQTT_PORT);
+  mqttClient.setCallback(callback);
 
   // Initialize LEDs Status
   for (int i = 0; i < 4; i++) {
     pinMode(USER_LEDS[i], OUTPUT);
   }
   
+  
+  postData();
+  Scheduler.startLoop(runMQTT);
+  
 }
 
 
 void loop() {
+  static unsigned long lastData = 0;
+  unsigned long now = millis();
+  
+  if (now - lastData > 300000) {
+    lastData = now;
+    
+    if (WiFi.status() != WL_CONNECTED){
+      connectToWiFi();
+    }
+    
     Serial.println("Start Loop");
     postData();
     Serial.println("End Loop");
-    delay(271000);
+  }
 
-
+  yield();
 }
 
 void connectToWiFi() {
+
   while (WiFi.status() != WL_CONNECTED) {
-    Serial.print("- Attempting to connect to WPA SSID: ");
-    Serial.println(ssid);
     // WiFi.begin(ssid); // If no password is set up
     WiFi.begin(ssid, password);
     delay(500);
@@ -144,7 +192,6 @@ void connectToWiFi() {
 
 void connectToEthernet(){
   if(Ethernet.begin(mac, ip)) {
-    delay(1000);
     Serial.println("Ethernet Connection - Successful");
   }else {
     status_debug(2);
@@ -164,43 +211,147 @@ void connectToModbus(){
   Serial.println("Modbus RTU Connection - Successful");
 }
 
+void connectToMQTT(){
+  while (!mqttClient.connected()) {
+    if (mqttClient.connect("OptaClient",mqttUser,mqttPass)) {
+      if (gotError == 11){
+        clearError();
+      }
+      Serial.println("Connected to MQTT Server");
+      mqttClient.subscribe(mqttTopic);
+      
+    } else {
+      status_debug(11);
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println("Error Connecting to MQTT Server");
+      delay(1000);
+    }
+  }
+}
+
+void callback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message: ");
+  String messageTemp;
+
+  for (int i = 0; i < length; i++) {
+    messageTemp += (char)message[i];
+  }
+  int startIndex = 0;
+  int endIndex = 0;
+  
+  endIndex = messageTemp.indexOf(',');
+  String action = messageTemp.substring(startIndex, endIndex);
+
+  startIndex = endIndex;
+  endIndex = messageTemp.indexOf(',', startIndex + 1);
+  String action_value = messageTemp.substring(startIndex + 1, endIndex);
+  
+  startIndex = endIndex;
+  endIndex = messageTemp.indexOf(',', startIndex + 1);
+  int FC_Unit_Index = (messageTemp.substring(startIndex + 1, endIndex)).toInt();
+  int FC_Unit = FC_ADD[FC_Unit_Index];
+
+  Serial.println("Action: " + action + " Value: " + action_value + " Unit: " + FC_Unit);
+  
+  if (action == "temp"){
+    int action_state = (int)(action_value.toFloat() * 10);
+    if (FC_Action(FC_Unit + 1, 3, action_state, 0) == "success"){
+      Serial.println("successful action");
+    } else {
+      Serial.println("error");
+    }
+    
+  } else if (action == "power"){
+    int action_state = action_value.toInt();
+    if (FC_Action(FC_Unit + 1, 0, action_state, 0) == "success"){
+      Serial.println("successful action");
+    } else {
+      Serial.println("error");
+    }
+    
+  } else if (action == "fanmode"){
+    int action_state = action_value.toInt();
+    if (FC_Action(FC_Unit + 1, 2, action_state, 0) == "success"){
+      Serial.println("successful action");
+    } else {
+      Serial.println("error");
+    }
+
+  } else if (action == "operationmode"){
+    int action_state = action_value.toInt();
+    if (FC_Action(FC_Unit + 1, 1, action_state, 0) == "success"){
+      Serial.println("successful action");
+    } else {
+      Serial.println("error");
+    }
+    
+    
+  }
+
+
+  //updateAirConStatus();
+}
+
+void runMQTT(){
+  if (WiFi.status() != WL_CONNECTED){
+    connectToWiFi();
+  }
+    
+  if (!mqttClient.connected()) {
+    connectToMQTT();
+  }
+  
+  mqttClient.loop();
+
+  yield();
+}
+
 
 void postData() {
   // Create JSON document to store sensor data
   DynamicJsonDocument allReadings_Json(JSON_BYTE * 3);
+  String lorawan_readings = getLorawanData();
   String energy_readings = getEnergyData();
-  //String lorawan_readings = getLorawanData();
   String FCRT_readings = getRoomTemperatureData();
+  String FC_status_readings = getAllFCFullStatus();
+  String FC_Error = getAllFCErrorCodes();
   
   DynamicJsonDocument energy_doc(JSON_BYTE);
   DeserializationError error = deserializeJson(energy_doc, energy_readings);
   if (error) {
-    Serial.print(F("Failed to parse test_energy_readings: "));
-    Serial.println(error.f_str());
     status_debug(8);
     return;
   }
   
-//  DynamicJsonDocument lorawan_doc(JSON_BYTE);
-//  error = deserializeJson(lorawan_doc, lorawan_readings);
-//  if (error) {
-//    Serial.print(F("Failed to parse lorawan_readings: "));
-//    Serial.println(error.f_str());
-//    status_debug(8);
-//    return;
-//  }
+  DynamicJsonDocument lorawan_doc(JSON_BYTE);
+  error = deserializeJson(lorawan_doc, lorawan_readings);
+  if (error) {
+    status_debug(8);
+    return;
+  }
 
   DynamicJsonDocument fancoil_doc(JSON_BYTE);
   error = deserializeJson(fancoil_doc, FCRT_readings);
   if (error) {
-    Serial.print(F("Failed to parse lorawan_readings: "));
-    Serial.println(error.f_str());
     status_debug(8);
     return;
   }
 
-  
+  DynamicJsonDocument allStatus_doc(JSON_BYTE);
+  error = deserializeJson(allStatus_doc, FC_status_readings);
+  if (error) {
+    status_debug(8);
+    return;
+  }
 
+  DynamicJsonDocument FCerror_doc(JSON_BYTE);
+  error = deserializeJson(FCerror_doc, FC_Error);
+  if (error) {
+    status_debug(8);
+    return;
+  }
+  
   if ( gotError == 8 ){
       clearError();
   }
@@ -209,17 +360,24 @@ void postData() {
   JsonObject energyData = allReadings_Json.createNestedObject("Energy_Readings");
   energyData.set(energy_doc.as<JsonObject>());
 
-  //JsonObject lorawanData = allReadings_Json.createNestedObject("Lorawan_Readings");
-  //lorawanData.set(lorawan_doc.as<JsonObject>());
+  JsonObject lorawanData = allReadings_Json.createNestedObject("Lorawan_Readings");
+  lorawanData.set(lorawan_doc.as<JsonObject>());
   
-  JsonObject FCData = allReadings_Json.createNestedObject("Fan_coil_RT_Readings");
-  FCData.set(fancoil_doc.as<JsonObject>());
+  JsonObject FC_TempData = allReadings_Json.createNestedObject("Fan_coil_RT_Readings");
+  FC_TempData.set(fancoil_doc.as<JsonObject>());
+
+  JsonObject FC_StatusData = allReadings_Json.createNestedObject("FC_FullStatus_Readings");
+  FC_StatusData.set(allStatus_doc.as<JsonObject>());
+
+  JsonObject FC_ErrorData = allReadings_Json.createNestedObject("FC_ErrorCode_Readings");
+  FC_ErrorData.set(FCerror_doc.as<JsonObject>());
 
   // Serialize and print the combined JSON
   //serializeJson(allReadings_Json, Serial);
 
   String jsonData;
   serializeJson(allReadings_Json, jsonData);
+
   sendDataToServer(jsonData);
 }
 
@@ -234,25 +392,27 @@ String getEnergyData(){
         float sensor_current1 = readEMAddress(slave_address, 0x200C, CURRENT_DL[type]) * CURRENT_SF[type];
         float sensor_current2 = readEMAddress(slave_address, 0x200E, CURRENT_DL[type]) * CURRENT_SF[type];
         float sensor_current3 = readEMAddress(slave_address, 0x2010, CURRENT_DL[type]) * CURRENT_SF[type];
-
-        float currents[] = {sensor_current1, sensor_current2, sensor_current3};
-        for (int m = 0; m < 2; m++) {
-          for (int n = m + 1; n < 3; n++) {
-            if (currents[m] > currents[n]) {
-              float temp = currents[m];
-              currents[m] = currents[n];
-              currents[n] = temp;
+        if (sensor_current1 == -1 || sensor_current2 == -1 || sensor_current3 == -1){
+          newSensorJson["Current"] = -1;
+        } else {
+          float currents[] = {sensor_current1, sensor_current2, sensor_current3};
+          for (int m = 0; m < 2; m++) {
+            for (int n = m + 1; n < 3; n++) {
+              if (currents[m] > currents[n]) {
+                float temp = currents[m];
+                currents[m] = currents[n];
+                currents[n] = temp;
+              }
             }
           }
+          newSensorJson["Current"] = currents[1];
         }
-        newSensorJson["Current"] = currents[1];
       } else {
         newSensorJson["Current"] = readEMAddress(slave_address, CURRENT_ADD[type], CURRENT_DL[type]) * CURRENT_SF[type];
       }
 
       newSensorJson["Energy"] = readEMAddress(slave_address, ENERGY_ADD[type], ENERGY_DL[type]) * ENERGY_SF[type];
       newSensorJson["Power"] = readEMAddress(slave_address, POWER_ADD[type], POWER_DL[type]) * POWER_SF[type];
-      
       slave_address += 1;
     }
   }
@@ -261,39 +421,36 @@ String getEnergyData(){
   String jsonData;
   serializeJson(allEnergyJson, jsonData);
 
-  Serial.println(jsonData);
   return jsonData;
 }
 
 String getLorawanData(){
   DynamicJsonDocument allJson(JSON_BYTE);
-
-  espClient.stop();
   
-  if (espClient.connect(server, HTTP_PORT)) {
+  if (ethClient.connect(server, HTTP_PORT)) {
     if ( gotError == 5 ){
       clearError();
     }
     // Prepare and send the HTTP GET request
-    espClient.println("GET /" + packetAPI + " HTTP/1.1");  // GET Request
-    espClient.println("Host: " + String(lorawan));
-    espClient.println("Authorization: Bearer " + token);  // Add the Authorization header
-    espClient.println("Connection: close");
-    espClient.println();  // End of headers
+    ethClient.println("GET /" + packetAPI + " HTTP/1.1");  // GET Request
+    ethClient.println("Host: " + String(lorawan));
+    ethClient.println("Authorization: Bearer " + token);  // Add the Authorization header
+    ethClient.println("Connection: close");
+    ethClient.println();  // End of headers
 
     // Wait for server response
-    while (espClient.connected()) {
-      String line = espClient.readStringUntil('\n');
+    while (ethClient.connected()) {
+      String line = ethClient.readStringUntil('\n');
       if (line == "\r") {
         break;
       }
     }
 
     // Token Checking ( Since tokens change every 24H )
-    String response = espClient.readString();
+    String response = ethClient.readString();
     if (response.indexOf("error") != -1){
       token = getToken();
-      return "";
+      return getLorawanData();
     } else {
       int index = getStringIndex(response, "devEUI", 0);
 
@@ -305,7 +462,7 @@ String getLorawanData(){
         String json = getString(response, tempIndex + 14, '}') + '}';
         json.replace("\\", "");
         
-        DynamicJsonDocument jsonDoc(200);
+        DynamicJsonDocument jsonDoc(JSON_BYTE);
         DeserializationError err = deserializeJson(jsonDoc, json);
         if (err) {
             Serial.print(F("deserializeJson() failed: "));
@@ -339,23 +496,8 @@ String getLorawanData(){
         
         index = getStringIndex(response, "devEUI", index + 5);
       } 
-      
-      espClient.stop();  // Close the connection to free up resources
-      
-      // Now proceed with the DELETE request
-      if (espClient.connect(server, HTTP_PORT)) {
-        espClient.println("DELETE /" + packetAPI + " HTTP/1.1");
-        espClient.println("Host: " + String(lorawan));
-        espClient.println("Authorization: Bearer " + token);
-        espClient.println("Content-Type: application/json");
-        espClient.println("Connection: close");
-        espClient.println();
-  
-        delay(5000);
-      } else {
-        Serial.println("- Failed to connect for DELETE request");
-        status_debug(5);
-      }
+      ethClient.stop();
+      deletePackets();
 
       // Convert JSON to string
       String jsonData;
@@ -367,9 +509,25 @@ String getLorawanData(){
     } else {
       Serial.println("- Connection to LoRaWAN device failed");
       status_debug(5);
+      return "{}";
     }
 
         
+}
+
+void deletePackets(){
+  if (ethClient.connect(server, HTTP_PORT)) {
+    ethClient.println("DELETE /" + packetAPI + " HTTP/1.1");
+    ethClient.println("Host: " + String(lorawan));
+    ethClient.println("Authorization: Bearer " + token);
+    ethClient.println("Content-Type: application/json");
+    ethClient.println("Connection: close");
+    ethClient.println();
+  } else {
+    status_debug(5);
+  }
+
+  ethClient.stop();
 }
 
 String getRoomTemperatureData(){
@@ -383,7 +541,106 @@ String getRoomTemperatureData(){
 
   String jsonData;
   serializeJson(fancoil_doc, jsonData);
-    
+
+  return jsonData;
+}
+
+String getFCStatus(int FU){
+  String result = FC_Action(FU, 0, 0, 1);
+  if (result == "error"){
+    return "ERROR";
+  }
+  int FC_status = result.toInt();
+  switch (FC_status){
+    case 0:
+      return "OFF";
+    case 1:
+      return "ON";
+  }
+}
+
+String getFCOMStatus(int FU){
+  String result = FC_Action(FU, 1, 0, 1);
+  if (result == "error"){
+    return "ERROR";
+  }
+  int FC_OM = result.toInt();
+  switch (FC_OM){
+    case 0:
+      return "AUTO";
+    case 1:
+      return "HEAT";
+    case 2:
+      return "COOL";
+    case 3:
+      return "FAN";
+    case 4:
+      return "DRY";
+  }
+}
+
+String getFCFanStatus(int FU){
+  String result = FC_Action(FU, 2, 0, 1);
+  if (result == "error"){
+    return "ERROR";
+  }
+  int FC_FAN = result.toInt();
+  switch (FC_FAN){
+    case 0:
+      return "AUTO";
+    case 1:
+      return "VERY LOW";
+    case 2:
+      return "LOW";
+    case 3:
+      return "MID";
+    case 4:
+      return "HIGH";
+    case 5:
+      return "VERY HIGH";
+  }
+}
+
+float getFCSetPoint(int FU){
+  String result = FC_Action(FU, 3, 0, 1);
+  if (result == "error"){
+    return 404;
+  }
+  return result.toFloat() / 10.0;
+}
+
+String getFCErrorCode(int FU){
+  return FC_Action(FU, 5, 0, 1);
+}
+
+String getAllFCErrorCodes(){
+  DynamicJsonDocument allError_doc(JSON_BYTE);
+  
+  for (int i = 0; i < NUM_FC_UNITS; i++ ){
+    String json_string = "FC_Unit_" + String(FC_ADD[i]);
+    allError_doc[json_string] = getFCErrorCode(FC_ADD[i] + 1);
+  }
+
+  String jsonData;
+  serializeJson(allError_doc, jsonData);
+  return jsonData;
+}
+
+String getAllFCFullStatus(){
+  DynamicJsonDocument allDoc(JSON_BYTE);
+  for (int i = 0; i < NUM_FC_UNITS; i++ ){
+    JsonObject newFCJson  = allDoc.createNestedObject("FC_Unit_" + String(FC_ADD[i]));
+    for (int j = 0; j < 4; j++ ){
+      int FU = FC_ADD[i] + 1;
+      newFCJson["Status"] = getFCStatus(FU);
+      newFCJson["Fan_Status"] = getFCFanStatus(FU);
+      newFCJson["Set_Point"] = getFCSetPoint(FU);
+      newFCJson["Operation_Mode"] = getFCOMStatus(FU);
+    } 
+  }
+
+  String jsonData;
+  serializeJson(allDoc, jsonData);
   return jsonData;
 }
 
@@ -394,6 +651,7 @@ String FC_Action(int FU, int action, int action_state ,int mode){
    * ACTION == 2, FAN SPEED
    * ACTION == 3, TEMPERATURE SET POINT
    * ACTION == 4, ROOM TEMPERATURE
+   * ACTION == 5, ERROR CODE
    */
   /*
    * MODE == 0, WRITE
@@ -403,52 +661,87 @@ String FC_Action(int FU, int action, int action_state ,int mode){
   if (mode == 0){
     // Write
     if (ModbusRTUClient.holdingRegisterWrite(INTESIS_GATEWAY, register_address, action_state)) {
+      return "success";  
     } else {
       Serial.println("Failed to write to holding register.");
       status_debug(9);
+      return "error";
     }
     
-    return "";
+
   } else if (mode == 1) {
     // Read
-    return String(ModbusRTUClient.holdingRegisterRead(INTESIS_GATEWAY, register_address));
+    if (ModbusRTUClient.holdingRegisterRead(INTESIS_GATEWAY, register_address) == -1) {
+      status_debug(10);
+      return "error";
+    } else {
+      if (gotError == 10){
+        clearError();
+      }
+      return String(ModbusRTUClient.holdingRegisterRead(INTESIS_GATEWAY, register_address));
+    }
   }
 }
 
+void updateAirConStatus(){
+  String FC_status_readings = getAllFCFullStatus();
+  if (WiFi.status() == WL_CONNECTED) {
+    connectToWiFi();
+  }
+  
+  if (httpClient.connect(endpoint, PORT)) {
+    if (gotError == 7){
+      clearError();
+    }
+    
+    // Prepare HTTP POST request
+    httpClient.println("PUT " + statusPath + " HTTP/1.1");
+    httpClient.println("Host: " + String(endpoint));
+    httpClient.println("Content-Type: application/json");
+    httpClient.print("Content-Length: ");
+    httpClient.println(FC_status_readings.length());
+    httpClient.print("x-api-key: ");
+    httpClient.println(apiKey);
+    httpClient.println();  // End of headers
+    httpClient.println(FC_status_readings);  // Send JSON data
+    
+  } else {
+    status_debug(7);
+  }
+
+  httpClient.stop();
+}
 
 void sendDataToServer(const String& jsonData) {
   if (WiFi.status() == WL_CONNECTED) {
-    client.setTimeout(5000);
-    if (client.connect(endpoint, PORT)) {
-      if (gotError == 7){
-        clearError();
-      }
-      
-      // Prepare HTTP POST request
-      client.println("POST " + endpointPath + " HTTP/1.1");
-      client.println("Host: 54.252.31.39:8080");
-      client.println("Content-Type: application/json");
-      client.print("Content-Length: ");
-      client.println(jsonData.length());
-      client.print("x-api-key: ");
-      client.println(apiKey);
-      client.println();  // End of headers
-      client.println(jsonData);  // Send JSON data
-      
-      delay(1000);
-      
-
-      // Print server response
-      String response = client.readString();
-      Serial.println("Server response:");
-      Serial.println(response);
-    } else {
-      status_debug(7);
-    }
-    client.stop();
-  } else {
     connectToWiFi();
   }
+  
+  if (httpClient.connect(endpoint, PORT)) {
+    if (gotError == 7){
+      clearError();
+    }
+    
+    // Prepare HTTP POST request
+    httpClient.println("POST " + endpointPath + " HTTP/1.1");
+    httpClient.println("Host: " + String(endpoint));
+    httpClient.println("Content-Type: application/json");
+    httpClient.print("Content-Length: ");
+    httpClient.println(jsonData.length());
+    httpClient.print("x-api-key: ");
+    httpClient.println(apiKey);
+    httpClient.println();  // End of headers
+    httpClient.println(jsonData);  // Send JSON data
+    
+    // Print server response
+    String response = httpClient.readString();
+    Serial.println("Server response:");
+    Serial.println(response);
+  } else {
+    status_debug(7);
+  }
+
+  httpClient.stop();
 }
 
 // Function for debugging with LED status
@@ -463,8 +756,10 @@ void status_debug(int error_code){
   * ERROR 5 - Lorawan connection Failed
   * ERROR 6 - Lorawan getToken Failed
   * ERROR 7 - AWS connection Failed
-  * ERROR 8 - Parsing of Energy meter and Lorawan Readings failed
-  * ERROR 9 - Failed to write to Fan Coil Unit
+  * ERROR 8 - Parsing of Readings Failed
+  * ERROR 9 - Failed to write to Intesis Gateway
+  * ERROR 10 - Failed to read from Intesis Gateway
+  * ERROR 11 - Failed to Connect to MQTT Server
   */
   int sig_digit = 3;
   
@@ -496,15 +791,12 @@ void clearError(){
 }
 
 float readEMAddress(int ID, int addr, int data_len) {
-
-  Serial.print("Reading values from device ");
-  Serial.println("Slave address of sensor: " + String(ID));
-
-  delay(1000);
+  waitTime(1000);
+  
   if (!ModbusRTUClient.requestFrom(ID, INPUT_REGISTERS, addr, data_len)) {
     // Failed Modbus Request
     status_debug(4);
-    return 0.0;
+    return -1;
   } else {
     unsigned long firstByte = ModbusRTUClient.read();
     unsigned long secondByte = ModbusRTUClient.read();
@@ -540,13 +832,11 @@ String getString(String response,int index, char lookOut){
 }
 
 String getToken(){
-  espClient.stop();
-  
-  if (espClient.connect(lorawan, HTTP_PORT)) {
+  if (ethClient.connect(lorawan, HTTP_PORT)) {
     if (gotError == 5){
       clearError();
     }
-    Serial.println("Getting Token...");
+    Serial.print("Getting Token... ");
     JsonDocument doc;
 
     doc["username"] = authName;
@@ -555,25 +845,25 @@ String getToken(){
         
     serializeJson(doc, jsonData);
     
-    espClient.println("POST /" + loginAPI + " HTTP/1.1");
-    espClient.println("Host: " + String(lorawan));
-    espClient.println("Content-Type: application/json");  // Content type
-    espClient.println("Content-Length: " + String(jsonData.length())); 
-    espClient.println("Connection: close");
-    espClient.println();  // End of headers
+    ethClient.println("POST /" + loginAPI + " HTTP/1.1");
+    ethClient.println("Host: " + String(lorawan));
+    ethClient.println("Content-Type: application/json");  // Content type
+    ethClient.println("Content-Length: " + String(jsonData.length())); 
+    ethClient.println("Connection: close");
+    ethClient.println();  // End of headers
 
     // Send the JSON payload
-    espClient.println(jsonData);
+    ethClient.println(jsonData);
 
-    while (espClient.connected()) {
-      String line = espClient.readStringUntil('\n');
+    while (ethClient.connected()) {
+      String line = ethClient.readStringUntil('\n');
       if (line == "\r") {
         break;
       }
     }
 
     // Read and print the server response
-    String response = espClient.readString();
+    String response = ethClient.readString();
 
     // Parse JSON response
     JsonDocument doc2;
@@ -589,9 +879,19 @@ String getToken(){
     // Extract JWT from the JSON response
     String jwt = doc2["jwt"].as<String>();
     
+    ethClient.stop();
     return jwt;
   } else {
     status_debug(5);
+    
+    ethClient.stop();
     return "";
+  }
+}
+
+void waitTime(int milli){
+  unsigned long startTime = millis();
+  while (millis() - startTime < milli){
+    yield();
   }
 }

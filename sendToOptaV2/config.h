@@ -4,12 +4,20 @@
 #define WIFI_SSID "eee-iot"
 #define WIFI_PASS "I0t@mar2025!"
 
-// AWS Configeration
+// AWS Configuration
+#define AWS_USER_ID "xxxx"
 #define AWS_IP "54.252.31.39"
 #define AWS_PATH "/web/lorawan"
+#define AWS_FC_STATUS "web/aircon_status"
 #define AWS_PORT 8080
 #define AWS_API "95130"
 
+// MQTT Configuration
+#define MQTT_SERVER "3.25.195.46"
+#define MQTT_PORT 3000
+#define MQTT_TOPIC "arduino/read"
+#define MQTT_USER "user_01"
+#define MQTT_PASS "superman101"
 
 // Energy Meter Configeration
 #define NUM_METER_TYPES 2
@@ -40,7 +48,7 @@
 #define INTESIS_GATEWAY 7
 #define NUM_FC_UNITS 8
 #define FC_ADDRESS {1, 2, 3, 4, 5, 6, 7, 8}
-#define FC_ACTION_ADDRESS {0, 1, 3, 5, 6}
+#define FC_ACTION_ADDRESS {0, 1, 3, 5, 6, 42}
 
 
 #endif // CONFIG_H
